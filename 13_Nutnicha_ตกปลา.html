@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>เกมตกปลาด้วยนิ้วชี้ (MediaPipe Index Finger Fishing)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    
+    <!-- MediaPipe Hands Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            font-family: 'Kanit', sans-serif;
+            user-select: none;
+            overflow: hidden;
+            background-color: #030712;
+        }
+
+        /* Video element hidden, canvas renders the feed */
+        #webcam {
+            transform: scaleX(-1);
+            display: none;
+        }
+
+        .glow-text {
+            text-shadow: 0 0 16px rgba(56, 189, 248, 0.9), 0 0 30px rgba(14, 165, 233, 0.6);
+        }
+
+        .glow-text-gold {
+            text-shadow: 0 0 16px rgba(250, 204, 21, 0.9), 0 0 30px rgba(234, 179, 8, 0.6);
+        }
+
+        .glow-box {
+            box-shadow: 0 0 25px rgba(14, 165, 233, 0.4), inset 0 0 15px rgba(56, 189, 248, 0.2);
+        }
+
+        .glow-box-pink {
+            box-shadow: 0 0 25px rgba(236, 72, 153, 0.5), inset 0 0 15px rgba(244, 114, 182, 0.3);
+        }
+
+        .pulse-glow {
+            animation: pulseGlow 2s infinite alternate;
+        }
+
+        @keyframes pulseGlow {
+            0% { box-shadow: 0 0 15px rgba(6, 182, 212, 0.4); }
+            100% { box-shadow: 0 0 35px rgba(6, 182, 212, 0.8), 0 0 50px rgba(14, 165, 233, 0.5); }
+        }
+
+        /* Custom scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #06b6d4;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-white min-h-screen flex flex-col justify-between relative select-none">
+
+    <!-- Hidden webcam element -->
+    <video id="webcam" playsinline></video>
+
+    <!-- Main Game Canvas Container -->
+    <div class="relative w-full h-screen overflow-hidden flex items-center justify-center">
+        <!-- Render Canvas for Video Feed + Game Elements -->
+        <canvas id="gameCanvas" class="w-full h-full object-cover block"></canvas>
+
+        <!-- HUD Overlay (Top Bar) -->
+        <div id="hud" class="absolute top-4 left-4 right-4 flex justify-between items-center pointer-events-none z-10 hidden">
+            <!-- Left Info: Score & Level -->
+            <div class="flex items-center space-x-4 bg-slate-900/90 backdrop-blur-lg px-6 py-3 rounded-3xl border-2 border-cyan-400/60 shadow-2xl glow-box">
+                <div class="flex flex-col">
+                    <span class="text-xs text-cyan-300 font-extrabold tracking-widest uppercase">คะแนน (Score)</span>
+                    <span id="scoreDisplay" class="text-4xl font-black text-amber-300 glow-text-gold tracking-tight">0</span>
+                </div>
+                <div class="h-10 w-[2px] bg-cyan-500/40 mx-1"></div>
+                <div class="flex flex-col">
+                    <span class="text-xs text-emerald-400 font-extrabold tracking-widest uppercase">เลเวล (Level)</span>
+                    <span id="levelDisplay" class="text-3xl font-black text-emerald-300 glow-text">1</span>
+                </div>
+            </div>
+
+            <!-- Combo & Multiplier Display -->
+            <div id="comboBadge" class="hidden transition-all duration-300 transform scale-90 opacity-0 bg-gradient-to-r from-amber-500 via-pink-500 to-purple-600 px-6 py-2.5 rounded-2xl text-white font-black text-xl shadow-2xl border-2 border-yellow-300 glow-box-pink animate-bounce">
+                <span id="comboCount" class="text-yellow-200 text-2xl">2x</span> COMBO! 🔥
+            </div>
+
+            <!-- Right Info: Lives & Camera Status -->
+            <div class="flex items-center space-x-3 bg-slate-900/90 backdrop-blur-lg px-6 py-3 rounded-3xl border-2 border-cyan-400/60 shadow-2xl glow-box">
+                <div class="flex flex-col items-end">
+                    <span class="text-xs text-rose-300 font-extrabold tracking-widest uppercase">พลังชีวิต (Lives)</span>
+                    <div id="livesContainer" class="flex space-x-2 text-2xl mt-1">
+                        <span class="heart text-rose-500 filter drop-shadow-[0_0_8px_rgba(244,63,94,0.8)]">❤️</span>
+                        <span class="heart text-rose-500 filter drop-shadow-[0_0_8px_rgba(244,63,94,0.8)]">❤️</span>
+                        <span class="heart text-rose-500 filter drop-shadow-[0_0_8px_rgba(244,63,94,0.8)]">❤️</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Start / Pause / Game Over Modals -->
+        <div id="overlayModal" class="absolute inset-0 bg-slate-950/80 backdrop-blur-xl flex items-center justify-center z-20 transition-opacity duration-300 p-4">
+            <!-- Start Screen Card -->
+            <div id="startCard" class="bg-gradient-to-b from-slate-900/95 via-slate-900/90 to-blue-950/95 border-2 border-cyan-400/50 p-8 sm:p-10 rounded-3xl max-w-lg w-full text-center shadow-[0_0_50px_rgba(6,182,212,0.3)] relative overflow-hidden pulse-glow">
+                <div class="absolute -top-12 -left-12 w-40 h-40 bg-cyan-400/20 rounded-full blur-3xl"></div>
+                <div class="absolute -bottom-12 -right-12 w-40 h-40 bg-pink-500/20 rounded-full blur-3xl"></div>
+
+                <div class="text-6xl mb-4 animate-bounce filter drop-shadow-[0_0_20px_rgba(250,204,21,0.8)]">🎣</div>
+                <h1 class="text-4xl sm:text-5xl font-black bg-gradient-to-r from-cyan-300 via-amber-300 to-pink-400 bg-clip-text text-transparent mb-3 tracking-tight">
+                    Finger Fishing HD
+                </h1>
+                <p class="text-cyan-100 text-sm sm:text-base mb-4 font-medium">
+                    ⚡ ใช้นิ้วชี้ของคุณควบคุมเบ็ดตกปลาวิเศษล่าคะแนนสูงสุด!
+                </p>
+
+                <div class="bg-slate-900/90 border border-cyan-400/40 rounded-2xl p-3 mb-5 text-center shadow-lg backdrop-blur-md">
+                    <span class="text-xs text-cyan-300 font-extrabold uppercase tracking-widest block mb-1">💻 ผู้พัฒนา (Developer)</span>
+                    <p class="text-sm sm:text-base font-bold text-amber-300 glow-text-gold">
+                        1. ด.ญ. ณัฐณิชา แสงอรุณ ม.3/3 เลขที่ 13
+                    </p>
+                </div>
+
+                <!-- Rules Box -->
+                <div class="bg-slate-900/80 border-2 border-cyan-500/30 rounded-2xl p-4 text-left text-xs sm:text-sm space-y-3 mb-6 text-slate-100 shadow-inner">
+                    <div class="flex items-start space-x-3">
+                        <span class="text-2xl">👈</span>
+                        <span><b>การเล่น:</b> ยก <u>ปลายนิ้วชี้</u> ส่องกล้อง แล้วไล่แตะฝูงปลาหลากสี</span>
+                    </div>
+                    <div class="flex items-start space-x-3">
+                        <span class="text-2xl">🐠</span>
+                        <span><b>ปลาทอง & ฉลาม:</b> ปลายิ่งยศสูง คะแนนยิ่งเยอะและให้คอมโบสูง!</span>
+                    </div>
+                    <div class="flex items-start space-x-3">
+                        <span class="text-2xl">💣</span>
+                        <span><b>กับดักระเบิด:</b> ระวังลูกระเบิดสีแดงสด หากแตะโดนจะหักชีวิตและคะแนน!</span>
+                    </div>
+                </div>
+
+                <!-- Input mode note -->
+                <div id="camStatus" class="text-xs text-cyan-300 font-semibold mb-6 flex items-center justify-center space-x-2 bg-slate-800/60 py-2 px-4 rounded-xl border border-cyan-500/20">
+                    <span class="w-3 h-3 rounded-full bg-amber-400 animate-ping"></span>
+                    <span>กำลังเปิดระบบตรวจจับกล้องเว็บแคม...</span>
+                </div>
+
+                <div class="flex flex-col gap-3">
+                    <button id="startBtn" class="w-full bg-gradient-to-r from-cyan-400 via-sky-500 to-blue-600 hover:from-cyan-300 hover:to-blue-500 text-slate-950 font-black py-4 px-6 rounded-2xl transition-all duration-200 shadow-[0_0_25px_rgba(6,182,212,0.6)] active:scale-95 text-xl tracking-wide">
+                        🎮 เริ่มเล่นเกม (Start Game)
+                    </button>
+                    <button id="mouseFallbackBtn" class="w-full bg-slate-800/90 hover:bg-slate-700 text-cyan-200 font-bold py-3 px-4 rounded-xl border border-cyan-500/30 text-xs transition active:scale-95">
+                        🖱️ ไม่มีกล้อง? เล่นด้วยเมาส์/สัมผัส (Mouse Mode)
+                    </button>
+                </div>
+            </div>
+
+            <!-- Game Over Card -->
+            <div id="gameOverCard" class="hidden bg-slate-900/95 border-2 border-rose-500/60 p-8 sm:p-10 rounded-3xl max-w-md w-full text-center shadow-[0_0_60px_rgba(244,63,94,0.4)] relative overflow-hidden">
+                <div class="text-7xl mb-4 animate-bounce filter drop-shadow-[0_0_20px_rgba(244,63,94,0.8)]">💥</div>
+                <h2 class="text-4xl font-black text-rose-400 mb-2 glow-text">จบเกมแล้ว!</h2>
+                <p class="text-slate-300 text-sm mb-4 font-medium">คุณหมดพลังชีวิตแล้ว ลองท้าทายใหม่อีกครั้ง!</p>
+
+                <div class="bg-slate-950/80 border border-cyan-500/30 rounded-xl p-2.5 mb-5">
+                    <span class="text-xs text-cyan-300 font-bold block">ผู้พัฒนา: ด.ญ. ณัฐณิชา แสงอรุณ ม.3/3 เลขที่ 13</span>
+                </div>
+
+                <div class="bg-slate-950/80 rounded-2xl p-5 mb-6 border-2 border-slate-800 flex justify-around shadow-inner">
+                    <div class="text-center">
+                        <span class="text-xs text-slate-400 block font-bold mb-1">คะแนนรวม</span>
+                        <span id="finalScore" class="text-4xl font-black text-amber-300 glow-text-gold">0</span>
+                    </div>
+                    <div class="h-12 w-[2px] bg-slate-800"></div>
+                    <div class="text-center">
+                        <span class="text-xs text-slate-400 block font-bold mb-1">เลเวลสูงสุด</span>
+                        <span id="finalLevel" class="text-4xl font-black text-emerald-400 glow-text">1</span>
+                    </div>
+                </div>
+
+                <button id="restartBtn" class="w-full bg-gradient-to-r from-emerald-400 via-teal-500 to-emerald-600 hover:from-emerald-300 hover:to-teal-400 text-slate-950 font-black py-4 px-6 rounded-2xl transition-all duration-200 shadow-[0_0_30px_rgba(16,185,129,0.5)] active:scale-95 text-xl tracking-wide">
+                    🔄 เล่นใหม่อีกครั้ง (Play Again)
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Web Audio API Synthesizer for retro dynamic sound effects without external audio files
+        const AudioFX = {
+            ctx: null,
+            init() {
+                if (!this.ctx) {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    this.ctx = new AudioContext();
+                }
+                if (this.ctx.state === 'suspended') {
+                    this.ctx.resume();
+                }
+            },
+            playCatch() {
+                if (!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(440, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(880, this.ctx.currentTime + 0.15);
+                gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.15);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.15);
+            },
+            playGoldenCatch() {
+                if (!this.ctx) return;
+                const now = this.ctx.currentTime;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(587.33, now); // D5
+                osc.frequency.setValueAtTime(880, now + 0.08); // A5
+                osc.frequency.setValueAtTime(1174.66, now + 0.16); // D6
+                gain.gain.setValueAtTime(0.3, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(now + 0.3);
+            },
+            playBomb() {
+                if (!this.ctx) return;
+                const now = this.ctx.currentTime;
+                // Noise buffer generation for explosion sound
+                const bufferSize = this.ctx.sampleRate * 0.3;
+                const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = Math.random() * 2 - 1;
+                }
+                const noise = this.ctx.createBufferSource();
+                noise.buffer = buffer;
+
+                const filter = this.ctx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(800, now);
+                filter.frequency.exponentialRampToValueAtTime(50, now + 0.3);
+
+                const gain = this.ctx.createGain();
+                gain.gain.setValueAtTime(0.6, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+
+                noise.connect(filter);
+                filter.connect(gain);
+                gain.connect(this.ctx.destination);
+                noise.start();
+                noise.stop(now + 0.3);
+            },
+            playLevelUp() {
+                if (!this.ctx) return;
+                const now = this.ctx.currentTime;
+                const notes = [261.63, 329.63, 392.00, 523.25]; // C E G C
+                notes.forEach((freq, i) => {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, now + i * 0.08);
+                    gain.gain.setValueAtTime(0.2, now + i * 0.08);
+                    gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.08 + 0.2);
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    osc.start(now + i * 0.08);
+                    osc.stop(now + i * 0.08 + 0.2);
+                });
+            }
+        };
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const videoElement = document.getElementById('webcam');
+
+        // Game Configuration
+        const gameState = {
+            running: false,
+            score: 0,
+            level: 1,
+            lives: 3,
+            combo: 0,
+            comboTimer: null,
+            useMouseFallback: false,
+            indexPos: { x: -100, y: -100, active: false, trail: [] },
+            entities: [],
+            particles: [],
+            bgBubbles: [],
+            floatingTexts: [],
+            lastSpawnTime: 0,
+            spawnInterval: 1100,
+            cameraReady: false,
+            timeElapsed: 0
+        };
+
+        // Resize Canvas dynamically
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            initBackgroundBubbles();
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        function initBackgroundBubbles() {
+            gameState.bgBubbles = [];
+            for (let i = 0; i < 35; i++) {
+                gameState.bgBubbles.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height,
+                    radius: Math.random() * 8 + 2,
+                    speed: Math.random() * 1.5 + 0.5,
+                    swing: Math.random() * 0.05,
+                    alpha: Math.random() * 0.5 + 0.2
+                });
+            }
+        }
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.vx = (Math.random() - 0.5) * 12;
+                this.vy = (Math.random() - 0.5) * 12;
+                this.radius = Math.random() * 7 + 3;
+                this.color = color;
+                this.alpha = 1;
+                this.decay = Math.random() * 0.03 + 0.025;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vx *= 0.96;
+                this.vy *= 0.96;
+                this.alpha -= this.decay;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.alpha);
+                ctx.fillStyle = this.color;
+                ctx.shadowColor = this.color;
+                ctx.shadowBlur = 12;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        class Shockwave {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.radius = 10;
+                this.maxRadius = 70;
+                this.color = color;
+                this.alpha = 1;
+            }
+
+            update() {
+                this.radius += 4;
+                this.alpha -= 0.04;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.alpha);
+                ctx.strokeStyle = this.color;
+                ctx.lineWidth = 4;
+                ctx.shadowColor = this.color;
+                ctx.shadowBlur = 15;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+
+        class FloatingText {
+            constructor(x, y, text, color) {
+                this.x = x;
+                this.y = y;
+                this.text = text;
+                this.color = color;
+                this.alpha = 1;
+                this.vy = -3;
+                this.scale = 1.3;
+            }
+
+            update() {
+                this.y += this.vy;
+                this.alpha -= 0.02;
+                if (this.scale > 1) this.scale -= 0.02;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.alpha);
+                ctx.font = `black ${Math.round(28 * this.scale)}px Kanit, sans-serif`;
+                ctx.fillStyle = this.color;
+                ctx.shadowColor = '#000000';
+                ctx.shadowBlur = 8;
+                ctx.fillText(this.text, this.x, this.y);
+                ctx.restore();
+            }
+        }
+
+        const FISH_TYPES = [
+            { name: 'ปลาเล็กนีออน', emoji: '🐟', points: 10, speed: 2.2, radius: 32, minLevel: 1, glow: '#38bdf8' },
+            { name: 'ปลาการ์ตูนส้ม', emoji: '🐠', points: 20, speed: 3.2, radius: 38, minLevel: 1, glow: '#fb923c' },
+            { name: 'ปลาทองคำนำโชค', emoji: '✨🐠', points: 50, speed: 4.8, radius: 32, minLevel: 2, glow: '#facc15' },
+            { name: 'หมึกสายฟ้า', emoji: '🐙', points: 80, speed: 3.8, radius: 44, minLevel: 2, glow: '#c084fc' },
+            { name: 'ฉลามยักษ์นีออน', emoji: '🦈', points: 100, speed: 5.8, radius: 52, minLevel: 3, glow: '#22d3ee' }
+        ];
+
+        class GameEntity {
+            constructor(isBomb = false) {
+                this.isBomb = isBomb;
+                this.direction = Math.random() < 0.5 ? 1 : -1;
+                this.radius = isBomb ? 34 : 32;
+                this.x = this.direction === 1 ? -this.radius * 2 : canvas.width + this.radius * 2;
+                this.y = Math.random() * (canvas.height - 240) + 120;
+
+                if (isBomb) {
+                    this.emoji = '💣';
+                    this.points = -25;
+                    this.speed = (Math.random() * 2.5 + 2.8) * (1 + gameState.level * 0.08);
+                    this.glow = '#ef4444';
+                } else {
+                    const availableFish = FISH_TYPES.filter(f => f.minLevel <= gameState.level);
+                    const fishDef = availableFish[Math.floor(Math.random() * availableFish.length)];
+                    this.type = fishDef.name;
+                    this.emoji = fishDef.emoji;
+                    this.points = fishDef.points;
+                    this.speed = fishDef.speed * (1 + (gameState.level - 1) * 0.12);
+                    this.radius = fishDef.radius;
+                    this.glow = fishDef.glow;
+                }
+
+                this.baseY = this.y;
+                this.waveFreq = Math.random() * 0.04 + 0.02;
+                this.waveAmp = Math.random() * 45 + 15;
+                this.time = Math.random() * 100;
+                this.pulse = 0;
+            }
+
+            update() {
+                this.time += 0.06;
+                this.pulse += 0.1;
+                this.x += this.speed * this.direction;
+                this.y = this.baseY + Math.sin(this.time) * this.waveAmp;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+
+                // Fluctuate pulse scale for juicy feel
+                const scalePulse = 1 + Math.sin(this.pulse) * 0.08;
+                ctx.scale(this.direction === -1 ? -scalePulse : scalePulse, scalePulse);
+
+                // Glowing aura around entity
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius + 8, 0, Math.PI * 2);
+                ctx.fillStyle = this.glow;
+                ctx.globalAlpha = 0.25;
+                ctx.shadowColor = this.glow;
+                ctx.shadowBlur = 20;
+                ctx.fill();
+
+                // Bright inner halo ring
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius + 2, 0, Math.PI * 2);
+                ctx.strokeStyle = this.glow;
+                ctx.lineWidth = 3;
+                ctx.globalAlpha = 0.8;
+                ctx.stroke();
+
+                // Draw main Emoji
+                ctx.globalAlpha = 1.0;
+                ctx.font = `${this.radius * 1.5}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(this.emoji, 0, 0);
+
+                ctx.restore();
+            }
+
+            isOutOfBounds() {
+                if (this.direction === 1 && this.x > canvas.width + 120) return true;
+                if (this.direction === -1 && this.x < -120) return true;
+                return false;
+            }
+        }
+
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.65,
+            minTrackingConfidence: 0.65
+        });
+
+        hands.onResults(onHandResults);
+
+        function onHandResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                const indexTip = landmarks[8];
+
+                const targetX = (1 - indexTip.x) * canvas.width;
+                const targetY = indexTip.y * canvas.height;
+
+                // Smooth position interpolation
+                gameState.indexPos.x += (targetX - gameState.indexPos.x) * 0.4;
+                gameState.indexPos.y += (targetY - gameState.indexPos.y) * 0.4;
+                gameState.indexPos.active = true;
+
+                // Trail tracking
+                gameState.indexPos.trail.push({ x: gameState.indexPos.x, y: gameState.indexPos.y, alpha: 1 });
+                if (gameState.indexPos.trail.length > 12) gameState.indexPos.trail.shift();
+            } else {
+                if (!gameState.useMouseFallback) {
+                    gameState.indexPos.active = false;
+                }
+            }
+        }
+
+        // Initialize Camera utils
+        let camera = null;
+        function initWebcam() {
+            const camStatusEl = document.getElementById('camStatus');
+            camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({ image: videoElement });
+                },
+                width: 1280,
+                height: 720
+            });
+
+            camera.start()
+                .then(() => {
+                    gameState.cameraReady = true;
+                    if (camStatusEl) {
+                        camStatusEl.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400"></span><span class="text-emerald-400">กล้องเว็บแคมพร้อมทำงานแล้ว! (Camera Ready)</span>`;
+                    }
+                })
+                .catch((err) => {
+                    console.warn("Camera failed or denied, enabling fallback mode", err);
+                    if (camStatusEl) {
+                        camStatusEl.innerHTML = `<span class="text-amber-400">⚠️ ไม่สามารถเข้าถึงกล้องได้ ระบบเปลี่ยนเป็นโหมดเมาส์โดยอัตโนมัติ</span>`;
+                    }
+                    gameState.useMouseFallback = true;
+                });
+        }
+
+        // Mouse and Touch Interaction Fallbacks
+        function handlePointerMove(e) {
+            if (!gameState.useMouseFallback && gameState.cameraReady && gameState.indexPos.active) return;
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+            gameState.indexPos.x = clientX - rect.left;
+            gameState.indexPos.y = clientY - rect.top;
+            gameState.indexPos.active = true;
+
+            gameState.indexPos.trail.push({ x: gameState.indexPos.x, y: gameState.indexPos.y, alpha: 1 });
+            if (gameState.indexPos.trail.length > 12) gameState.indexPos.trail.shift();
+        }
+
+        window.addEventListener('mousemove', handlePointerMove);
+        window.addEventListener('touchmove', handlePointerMove);
+
+        function checkCollisions() {
+            if (!gameState.indexPos.active) return;
+
+            const fingerX = gameState.indexPos.x;
+            const fingerY = gameState.indexPos.y;
+            const touchRadius = 32;
+
+            for (let i = gameState.entities.length - 1; i >= 0; i--) {
+                const ent = gameState.entities[i];
+                const dx = fingerX - ent.x;
+                const dy = fingerY - ent.y;
+                const dist = Math.hypot(dx, dy);
+
+                if (dist < ent.radius + touchRadius) {
+                    if (ent.isBomb) {
+                        AudioFX.playBomb();
+                        gameState.lives--;
+                        gameState.score = Math.max(0, gameState.score + ent.points);
+                        gameState.combo = 0;
+                        updateComboUI();
+                        updateLivesUI();
+
+                        spawnExplosion(ent.x, ent.y, '#ef4444', 35);
+                        gameState.particles.push(new Shockwave(ent.x, ent.y, '#ef4444'));
+                        gameState.floatingTexts.push(new FloatingText(ent.x, ent.y, `-25 HP! 💥`, '#f87171'));
+
+                        if (gameState.lives <= 0) {
+                            endGame();
+                        }
+                    } else {
+                        gameState.combo++;
+                        const multiplier = 1 + Math.floor(gameState.combo / 3) * 0.5;
+                        const gainedScore = Math.round(ent.points * multiplier);
+                        gameState.score += gainedScore;
+
+                        if (ent.points >= 50) {
+                            AudioFX.playGoldenCatch();
+                        } else {
+                            AudioFX.playCatch();
+                        }
+
+                        spawnExplosion(ent.x, ent.y, ent.glow, 25);
+                        gameState.particles.push(new Shockwave(ent.x, ent.y, ent.glow));
+
+                        const comboText = multiplier > 1 ? ` (+${gainedScore} x${multiplier})` : ` +${gainedScore}`;
+                        gameState.floatingTexts.push(new FloatingText(ent.x, ent.y, `${ent.emoji}${comboText}`, ent.glow));
+
+                        updateComboUI();
+                        checkLevelUp();
+                    }
+
+                    gameState.entities.splice(i, 1);
+                }
+            }
+        }
+
+        function checkLevelUp() {
+            const newLevel = Math.floor(gameState.score / 150) + 1;
+            if (newLevel > gameState.level) {
+                gameState.level = newLevel;
+                AudioFX.playLevelUp();
+                document.getElementById('levelDisplay').innerText = gameState.level;
+
+                gameState.floatingTexts.push(
+                    new FloatingText(canvas.width / 2 - 100, canvas.height / 2, `🚀 LEVEL UP! Lv.${gameState.level}`, '#facc15')
+                );
+            }
+            document.getElementById('scoreDisplay').innerText = gameState.score;
+        }
+
+        function spawnExplosion(x, y, color, count = 25) {
+            for (let i = 0; i < count; i++) {
+                gameState.particles.push(new Particle(x, y, color));
+            }
+        }
+
+        function updateComboUI() {
+            const badge = document.getElementById('comboBadge');
+            const comboCount = document.getElementById('comboCount');
+
+            if (gameState.combo >= 2) {
+                const multiplier = 1 + Math.floor(gameState.combo / 3) * 0.5;
+                comboCount.innerText = `${multiplier}x`;
+                badge.classList.remove('hidden', 'opacity-0', 'scale-90');
+                badge.classList.add('opacity-100', 'scale-100');
+            } else {
+                badge.classList.add('opacity-0', 'scale-90');
+                setTimeout(() => {
+                    if (gameState.combo < 2) badge.classList.add('hidden');
+                }, 300);
+            }
+        }
+
+        function updateLivesUI() {
+            const container = document.getElementById('livesContainer');
+            let html = '';
+            for (let i = 0; i < 3; i++) {
+                if (i < gameState.lives) {
+                    html += `<span class="heart text-rose-500 transition-all duration-300 transform scale-100">❤️</span>`;
+                } else {
+                    html += `<span class="heart text-slate-600 transition-all duration-300 opacity-40">🖤</span>`;
+                }
+            }
+            container.innerHTML = html;
+        }
+
+        function renderBackground() {
+            gameState.timeElapsed += 0.02;
+
+            // Draw Video Feed mirrored onto Canvas
+            if (videoElement.readyState >= 2) {
+                ctx.save();
+                ctx.scale(-1, 1);
+                ctx.drawImage(videoElement, -canvas.width, 0, canvas.width, canvas.height);
+                ctx.restore();
+
+                // Electric Deep Ocean Blue Tint Overlay with high contrast
+                const oceanGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                oceanGrad.addColorStop(0, 'rgba(3, 105, 161, 0.55)');
+                oceanGrad.addColorStop(0.5, 'rgba(15, 23, 42, 0.65)');
+                oceanGrad.addColorStop(1, 'rgba(3, 7, 18, 0.85)');
+                ctx.fillStyle = oceanGrad;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            } else {
+                // Vibrant fallback animated ocean gradient
+                const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                grad.addColorStop(0, '#0284c7');
+                grad.addColorStop(0.5, '#0f172a');
+                grad.addColorStop(1, '#020617');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+
+            // Render Animated Underwater Sunlight Rays
+            ctx.save();
+            ctx.globalCompositeOperation = 'screen';
+            const rayGrad = ctx.createRadialGradient(
+                canvas.width / 2, 0, 50,
+                canvas.width / 2, 0, canvas.height * 0.8
+            );
+            rayGrad.addColorStop(0, 'rgba(56, 189, 248, 0.35)');
+            rayGrad.addColorStop(0.5, 'rgba(14, 165, 233, 0.15)');
+            rayGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            ctx.fillStyle = rayGrad;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.restore();
+
+            // Render Floating Bubbles
+            ctx.save();
+            for (let b of gameState.bgBubbles) {
+                b.y -= b.speed;
+                b.x += Math.sin(gameState.timeElapsed + b.y) * 0.5;
+                if (b.y < -10) {
+                    b.y = canvas.height + 10;
+                    b.x = Math.random() * canvas.width;
+                }
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(186, 230, 253, ${b.alpha})`;
+                ctx.shadowColor = '#38bdf8';
+                ctx.shadowBlur = 8;
+                ctx.fill();
+            }
+            ctx.restore();
+        }
+
+        function renderCursor() {
+            if (!gameState.indexPos.active) return;
+
+            const { x, y, trail } = gameState.indexPos;
+
+            ctx.save();
+
+            // Render Neon Motion Trail
+            for (let i = 0; i < trail.length; i++) {
+                const t = trail[i];
+                t.alpha -= 0.05;
+                if (t.alpha > 0) {
+                    ctx.beginPath();
+                    ctx.arc(t.x, t.y, (i + 1) * 2.2, 0, Math.PI * 2);
+                    ctx.fillStyle = `rgba(56, 189, 248, ${t.alpha * 0.6})`;
+                    ctx.shadowColor = '#06b6d4';
+                    ctx.shadowBlur = 10;
+                    ctx.fill();
+                }
+            }
+
+            // Glowing index finger cursor aura
+            const gradient = ctx.createRadialGradient(x, y, 5, x, y, 42);
+            gradient.addColorStop(0, 'rgba(250, 204, 21, 0.95)');
+            gradient.addColorStop(0.4, 'rgba(56, 189, 248, 0.7)');
+            gradient.addColorStop(1, 'rgba(14, 165, 233, 0)');
+
+            ctx.beginPath();
+            ctx.arc(x, y, 42, 0, Math.PI * 2);
+            ctx.fillStyle = gradient;
+            ctx.fill();
+
+            // Hook Emoji
+            ctx.font = '36px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('🪝', x, y - 12);
+
+            // Bright Center Point
+            ctx.beginPath();
+            ctx.arc(x, y, 7, 0, Math.PI * 2);
+            ctx.fillStyle = '#ffffff';
+            ctx.shadowColor = '#facc15';
+            ctx.shadowBlur = 15;
+            ctx.fill();
+
+            // Neon Label
+            ctx.font = 'black 13px Kanit, sans-serif';
+            ctx.fillStyle = '#fef08a';
+            ctx.shadowColor = '#000000';
+            ctx.shadowBlur = 6;
+            ctx.fillText('⚡ นิ้วชี้ (Index Finger)', x, y + 28);
+
+            ctx.restore();
+        }
+
+        function gameLoop(timestamp) {
+            if (!gameState.running) return;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 1. Render Vibrant Ocean Background & Rays & Bubbles
+            renderBackground();
+
+            // 2. Spawn Entities
+            if (timestamp - gameState.lastSpawnTime > Math.max(450, gameState.spawnInterval - gameState.level * 90)) {
+                const isBomb = Math.random() < (0.16 + gameState.level * 0.03);
+                gameState.entities.push(new GameEntity(isBomb));
+                gameState.lastSpawnTime = timestamp;
+            }
+
+            // 3. Update & Draw Entities
+            for (let i = gameState.entities.length - 1; i >= 0; i--) {
+                const ent = gameState.entities[i];
+                ent.update();
+                ent.draw(ctx);
+
+                if (ent.isOutOfBounds()) {
+                    gameState.entities.splice(i, 1);
+                }
+            }
+
+            // 4. Update & Draw Particles & Shockwaves
+            for (let i = gameState.particles.length - 1; i >= 0; i--) {
+                const p = gameState.particles[i];
+                p.update();
+                p.draw(ctx);
+                if (p.alpha <= 0) gameState.particles.splice(i, 1);
+            }
+
+            // 5. Update & Draw Floating Text
+            for (let i = gameState.floatingTexts.length - 1; i >= 0; i--) {
+                const ft = gameState.floatingTexts[i];
+                ft.update();
+                ft.draw(ctx);
+                if (ft.alpha <= 0) gameState.floatingTexts.splice(i, 1);
+            }
+
+            // 6. Check Collisions
+            checkCollisions();
+
+            // 7. Render Finger Hook Target
+            renderCursor();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        function startGame() {
+            AudioFX.init();
+            gameState.running = true;
+            gameState.score = 0;
+            gameState.level = 1;
+            gameState.lives = 3;
+            gameState.combo = 0;
+            gameState.entities = [];
+            gameState.particles = [];
+            gameState.floatingTexts = [];
+
+            document.getElementById('scoreDisplay').innerText = '0';
+            document.getElementById('levelDisplay').innerText = '1';
+            updateLivesUI();
+            updateComboUI();
+
+            document.getElementById('hud').classList.remove('hidden');
+            document.getElementById('overlayModal').classList.add('opacity-0', 'pointer-events-none');
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        function endGame() {
+            gameState.running = false;
+            document.getElementById('hud').classList.add('hidden');
+
+            document.getElementById('finalScore').innerText = gameState.score;
+            document.getElementById('finalLevel').innerText = gameState.level;
+
+            document.getElementById('startCard').classList.add('hidden');
+            document.getElementById('gameOverCard').classList.remove('hidden');
+            document.getElementById('overlayModal').classList.remove('opacity-0', 'pointer-events-none');
+        }
+
+        // Event Listeners for Buttons
+        document.getElementById('startBtn').addEventListener('click', () => {
+            gameState.useMouseFallback = false;
+            startGame();
+        });
+
+        document.getElementById('mouseFallbackBtn').addEventListener('click', () => {
+            gameState.useMouseFallback = true;
+            startGame();
+        });
+
+        document.getElementById('restartBtn').addEventListener('click', () => {
+            document.getElementById('gameOverCard').classList.add('hidden');
+            document.getElementById('startCard').classList.remove('hidden');
+            startGame();
+        });
+
+        // Initialize WebCam on Load
+        window.onload = function() {
+            resizeCanvas();
+            initWebcam();
+        };
+    </script>
+</body>
+</html>
